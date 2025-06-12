@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
+import { FileConverterService, ConversionResult } from '@/services/fileConverter';
 
 // Types
 interface QueueItem {
@@ -19,6 +20,7 @@ interface HistoryItem {
   size: number;
   date: string;
   downloadUrl: string;
+  convertedFileName?: string;
 }
 
 const FORMAT_OPTIONS = [
@@ -163,57 +165,92 @@ export default function FileConverter() {
     }
   };
 
-  // Queue processing (simulation)
+  // Real queue processing with actual file conversion
   const processQueueItem = async (item: QueueItem): Promise<void> => {
-    const totalSteps = 5;
-    const stepDuration = 800;
-
-    // Update status to processing
-    setConversionQueue(prev => 
-      prev.map(qItem => 
-        qItem.id === item.id 
-          ? { ...qItem, status: 'processing', progress: 0 }
-          : qItem
-      )
-    );
-
-    // Simulate processing steps
-    for (let step = 1; step <= totalSteps; step++) {
-      await new Promise(resolve => setTimeout(resolve, stepDuration));
-      
+    try {
+      // Update status to processing
       setConversionQueue(prev => 
         prev.map(qItem => 
           qItem.id === item.id 
-            ? { ...qItem, progress: (step / totalSteps) * 100 }
+            ? { ...qItem, status: 'processing', progress: 0 }
             : qItem
         )
       );
+
+      // Perform actual file conversion
+      const result: ConversionResult = await FileConverterService.convertFile(
+        item.file,
+        item.format,
+        (progress) => {
+          setConversionQueue(prev => 
+            prev.map(qItem => 
+              qItem.id === item.id 
+                ? { ...qItem, progress }
+                : qItem
+            )
+          );
+        }
+      );
+
+      if (result.success && result.data) {
+        // Mark as completed
+        setConversionQueue(prev => 
+          prev.map(qItem => 
+            qItem.id === item.id 
+              ? { ...qItem, status: 'completed', progress: 100 }
+              : qItem
+          )
+        );
+
+        // Create download URL for the converted file
+        const downloadUrl = URL.createObjectURL(result.data);
+
+        // Add to history
+        const historyItem: HistoryItem = {
+          id: Date.now().toString(),
+          fileName: item.file.name,
+          originalFormat: item.file.name.split('.').pop() || '',
+          targetFormat: item.format,
+          size: item.file.size,
+          date: new Date().toISOString(),
+          downloadUrl: downloadUrl,
+          convertedFileName: result.filename
+        };
+
+        // Store in localStorage
+        const existingHistory = JSON.parse(localStorage.getItem('conversionHistory') || '[]');
+        const newHistory = [historyItem, ...existingHistory].slice(0, 50);
+        localStorage.setItem('conversionHistory', JSON.stringify(newHistory));
+
+        // Trigger update event for RecentConversions component
+        window.dispatchEvent(new CustomEvent('conversionAdded'));
+
+        showNotification(`✅ Successfully converted ${item.file.name} to ${item.format.toUpperCase()}`);
+      } else {
+        // Mark as failed
+        setConversionQueue(prev => 
+          prev.map(qItem => 
+            qItem.id === item.id 
+              ? { ...qItem, status: 'failed', progress: 0 }
+              : qItem
+          )
+        );
+
+        showNotification(`❌ Failed to convert ${item.file.name}: ${result.error}`);
+      }
+    } catch (error) {
+      // Mark as failed
+      setConversionQueue(prev => 
+        prev.map(qItem => 
+          qItem.id === item.id 
+            ? { ...qItem, status: 'failed', progress: 0 }
+            : qItem
+        )
+      );
+
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      showNotification(`❌ Conversion failed: ${errorMessage}`);
     }
-
-    // Mark as completed
-    setConversionQueue(prev => 
-      prev.map(qItem => 
-        qItem.id === item.id 
-          ? { ...qItem, status: 'completed', progress: 100 }
-          : qItem
-      )
-    );
-
-    // Add to history (we'll implement this later)
-    const historyItem: HistoryItem = {
-      id: Date.now().toString(),
-      fileName: item.file.name,
-      originalFormat: item.file.name.split('.').pop() || '',
-      targetFormat: item.format,
-      size: item.file.size,
-      date: new Date().toISOString(),
-      downloadUrl: '#' // Placeholder for now
-    };
-
-    // Store in localStorage for now
-    const existingHistory = JSON.parse(localStorage.getItem('conversionHistory') || '[]');
-    const newHistory = [historyItem, ...existingHistory].slice(0, 50);
-    localStorage.setItem('conversionHistory', JSON.stringify(newHistory));
   };
 
   const startQueueProcessing = async () => {
@@ -232,7 +269,39 @@ export default function FileConverter() {
     showNotification('All conversions completed!');
   };
 
-  const canAddToQueue = selectedFiles.length > 0 && selectedFormat;
+  // Get available formats based on selected files
+  const getAvailableFormats = (): typeof FORMAT_OPTIONS => {
+    if (selectedFiles.length === 0) {
+      return FORMAT_OPTIONS;
+    }
+
+    // Get formats supported by all selected files
+    const supportedFormats = new Set<string>();
+    
+    // For the first file, get all supported target formats
+    const firstFileExtension = selectedFiles[0].name.split('.').pop()?.toLowerCase() || '';
+    const firstFileSupported = FileConverterService.getSupportedConversions()[firstFileExtension] || [];
+    firstFileSupported.forEach(format => supportedFormats.add(format));
+
+    // For remaining files, keep only formats that are supported by all
+    for (let i = 1; i < selectedFiles.length; i++) {
+      const fileExtension = selectedFiles[i].name.split('.').pop()?.toLowerCase() || '';
+      const fileSupported = FileConverterService.getSupportedConversions()[fileExtension] || [];
+      
+      // Remove formats that are not supported by this file
+      supportedFormats.forEach(format => {
+        if (!fileSupported.includes(format)) {
+          supportedFormats.delete(format);
+        }
+      });
+    }
+
+    // Filter FORMAT_OPTIONS to only include supported formats
+    return FORMAT_OPTIONS.filter(option => supportedFormats.has(option.format));
+  };
+
+  const availableFormats = getAvailableFormats();
+  const canAddToQueue = selectedFiles.length > 0 && selectedFormat && availableFormats.some(f => f.format === selectedFormat);
   const hasQueueItems = conversionQueue.length > 0;
 
   return (
@@ -290,21 +359,37 @@ export default function FileConverter() {
           <div className="text-[1.3rem] font-bold mb-[25px] text-center bg-gradient-to-r from-[#667eea] to-[#764ba2] bg-clip-text text-transparent">
             Select Transformation Format
           </div>
+          {selectedFiles.length > 0 && availableFormats.length === 0 && (
+            <div className="text-center text-[#ff5757] mb-4 p-4 bg-[rgba(255,87,87,0.1)] rounded-lg border border-[rgba(255,87,87,0.3)]">
+              ⚠️ No compatible output formats available for the selected file types
+            </div>
+          )}
           <div className="grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-[18px]">
-            {FORMAT_OPTIONS.map((item) => (
-              <div 
-                key={item.format} 
-                className={`bg-[#1a1a2e] border rounded-[18px] p-[25px_20px] text-center cursor-pointer transition-all duration-[0.4s] cubic-bezier(0.4,0,0.2,1) relative overflow-hidden hover:border-[#667eea] hover:translate-y-[-8px] hover:shadow-[0_15px_35px_rgba(102,126,234,0.25)] before:content-[''] before:absolute before:inset-0 before:bg-gradient-to-r before:from-[#667eea] before:to-[#764ba2] before:opacity-0 before:transition-opacity before:duration-300 before:rounded-[18px] hover:before:opacity-10 ${
-                  selectedFormat === item.format 
-                    ? 'bg-gradient-to-r from-[#667eea] to-[#764ba2] border-[#667eea] translate-y-[-8px] scale-105 shadow-[0_20px_40px_rgba(102,126,234,0.4)]' 
-                    : 'border-[rgba(255,255,255,0.1)]'
-                }`}
-                onClick={() => handleFormatSelect(item.format)}
-              >
-                <span className="text-[2.2rem] mb-3 block transition-transform duration-300 hover:scale-110">{item.emoji}</span>
-                <div className="text-[0.95rem] font-bold uppercase tracking-[1px] relative z-[1]">{item.label}</div>
-              </div>
-            ))}
+            {FORMAT_OPTIONS.map((item) => {
+              const isAvailable = availableFormats.some(f => f.format === item.format);
+              return (
+                <div 
+                  key={item.format} 
+                  className={`bg-[#1a1a2e] border rounded-[18px] p-[25px_20px] text-center cursor-pointer transition-all duration-[0.4s] cubic-bezier(0.4,0,0.2,1) relative overflow-hidden before:content-[''] before:absolute before:inset-0 before:bg-gradient-to-r before:from-[#667eea] before:to-[#764ba2] before:opacity-0 before:transition-opacity before:duration-300 before:rounded-[18px] ${
+                    !isAvailable 
+                      ? 'opacity-40 cursor-not-allowed border-[rgba(255,255,255,0.05)]' 
+                      : selectedFormat === item.format 
+                        ? 'bg-gradient-to-r from-[#667eea] to-[#764ba2] border-[#667eea] translate-y-[-8px] scale-105 shadow-[0_20px_40px_rgba(102,126,234,0.4)]' 
+                        : 'border-[rgba(255,255,255,0.1)] hover:border-[#667eea] hover:translate-y-[-8px] hover:shadow-[0_15px_35px_rgba(102,126,234,0.25)] hover:before:opacity-10'
+                  }`}
+                  onClick={() => isAvailable && handleFormatSelect(item.format)}
+                  title={!isAvailable ? 'Not compatible with selected files' : `Convert to ${item.label}`}
+                >
+                  <span className="text-[2.2rem] mb-3 block transition-transform duration-300 hover:scale-110">{item.emoji}</span>
+                  <div className="text-[0.95rem] font-bold uppercase tracking-[1px] relative z-[1]">{item.label}</div>
+                  {!isAvailable && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-[rgba(0,0,0,0.7)] rounded-[18px]">
+                      <span className="text-[1.5rem]">🚫</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 

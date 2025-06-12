@@ -10,6 +10,7 @@ interface HistoryItem {
   size: number;
   date: string;
   downloadUrl: string;
+  convertedFileName?: string;
 }
 
 export default function RecentConversions() {
@@ -85,17 +86,38 @@ export default function RecentConversions() {
   };
 
   const handleDownload = (item: HistoryItem) => {
-    // For now, just show a notification
-    // In a real implementation, this would trigger the actual download
-    const notification = document.createElement('div');
-    notification.className = 'notification';
-    notification.textContent = `Download started for ${item.fileName}`;
-    document.body.appendChild(notification);
-    
-    setTimeout(() => {
-      notification.style.animation = 'slideOutRight 0.3s ease';
-      setTimeout(() => notification.remove(), 300);
-    }, 3000);
+    try {
+      // Create a temporary anchor element to trigger download
+      const link = document.createElement('a');
+      link.href = item.downloadUrl;
+      link.download = item.convertedFileName || `${item.fileName.split('.')[0]}.${item.targetFormat}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      // Show success notification
+      const notification = document.createElement('div');
+      notification.className = 'notification';
+      notification.textContent = `✅ Download started: ${link.download}`;
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        notification.style.animation = 'slideOutRight 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+      }, 3000);
+    } catch (error) {
+      // Show error notification
+      const notification = document.createElement('div');
+      notification.className = 'notification';
+      notification.style.background = 'linear-gradient(to right, #ff5757, #ff8a80)';
+      notification.textContent = `❌ Download failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        notification.style.animation = 'slideOutRight 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+      }, 3000);
+    }
   };
 
   const clearHistory = () => {
