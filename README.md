@@ -15,22 +15,6 @@
 
 ---
 
-## 📖 Table of Contents
-
-- [Overview](#overview)
-- [✨ Features](#features)
-- [🛠️ Technology Stack](#technology-stack)
-- [📋 Prerequisites](#prerequisites)
-- [⚡ Quick Start](#quick-start)
-- [🔧 Installation](#installation)
-- [⚙️ Configuration](#configuration)
-- [🚀 Usage](#usage)
-- [📁 Project Structure](#project-structure)
-- [🎯 Development Roadmap](#development-roadmap)
-- [🤝 Contributing](#contributing)
-- [📄 License](#license)
-- [📞 Support](#support)
-
 ## Overview
 
 AIMandi is a comprehensive **AI-powered file conversion web application** that allows users to upload various file types, convert them between different formats using intelligent processing algorithms, and manage their conversion history with full authentication and user management.
